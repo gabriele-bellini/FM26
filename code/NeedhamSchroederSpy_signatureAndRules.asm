@@ -20,7 +20,7 @@ signature:
 	controlled knowNonce: Prod(UserID, Nonce) -> Bool
 	controlled isNonceArrivedToReceiver: Nonce -> Bool
 	// without loosing generality, we assume comunication_i = (u_a, u_b, message_i) for all i
-	controlled comunication: MessageID -> Prod(UserID, UserID, MessageID) 
+	controlled comunication: MessageID -> Prod(UserID, UserID) 
 	controlled hasBeenRead: MessageID -> Bool // read by the intended user
 	controlled messageType: MessageID -> MessageType
 	controlled messageNUK: MessageID -> Prod(Nonce, UserID, PubKeyID)
@@ -29,7 +29,7 @@ signature:
 	controlled hasSentTo: Prod(UserID, Nonce) -> UserID
 	
 	derived isFresh: Nonce -> Bool
-	derived decryptNAK: Prod(MessageID, PrivKeyID) -> Prod(Nonce, UserID)
+	derived decryptNUK: Prod(MessageID, PrivKeyID) -> Prod(Nonce, UserID)
 	derived decryptNNK: Prod(MessageID, PrivKeyID) -> Prod(Nonce, Nonce)
 	derived decryptNK: Prod(MessageID, PrivKeyID) -> Nonce	
 	
@@ -45,22 +45,22 @@ signature:
 definitions:
 	// DOMAIN DEFINITIONS
 	// This is the minimal set configuration needed to accurately model and properly terminate the protocol
-	domain Nonce = {1 : 2}
-	domain MessageID = {1 : 5}
-	domain UserID = {1 : 3}
-	domain PubKeyID = {1 : 3}
-	domain PrivKeyID = {1 : 3}
-	domain SessionNumbers = {0 : 1}
-	function maxProtocolRuns = 1 
+//	domain Nonce = {1 : 2}
+//	domain MessageID = {1 : 5}
+//	domain UserID = {1 : 3}
+//	domain PubKeyID = {1 : 3}
+//	domain PrivKeyID = {1 : 3}
+//	domain SessionNumbers = {0 : 1}
+//	function maxProtocolRuns = 1 
 	// These are bigger domains to demonstrate the feasibility  of the approach even in bigger cases
-//	domain Nonce = {1 : 10}
-//	domain MessageID = {1 : 16}
-//	domain UserID = {1 : 4}
-//	domain PubKeyID = {1 : 4}
-//	domain PrivKeyID = {1 : 4}
-//	// this avoid nonces being waisted in numerous protocol start without completion
-//	domain SessionNumbers = {0 : 2}
-//	function maxProtocolRuns = 2
+	domain Nonce = {1 : 10}
+	domain MessageID = {1 : 16}
+	domain UserID = {1 : 4}
+	domain PubKeyID = {1 : 4}
+	domain PrivKeyID = {1 : 4}
+	// this avoid nonces being waisted in numerous protocol start without completion
+	domain SessionNumbers = {0 : 2}
+	function maxProtocolRuns = 2
 	
 	
 	// STATIC FUNCTION
@@ -80,9 +80,9 @@ definitions:
 	// FUNCTION DEFINITIONS
 	function isFresh($nonce in Nonce) = if not(exist $u in UserID with knowNonce($u,$nonce)=TRUE) then TRUE else FALSE endif
 	
-	function decryptNAK($m in MessageID, $k in PrivKeyID) =
+	function decryptNUK($m in MessageID, $k in PrivKeyID) =
 		let ($message = messageNUK($m)) in
-			if( isDef($message) ) then 
+			if( isDef($message) ) then // another type of message may have arrived
 				if( third($message) = pubKeyFromPrivate($k) ) then
 					(first($message), second($message))
 				endif
@@ -91,7 +91,7 @@ definitions:
 
 	function decryptNNK($m in MessageID, $k in PrivKeyID) =
 		let ($message = messageNNK($m)) in
-			if( isDef($message) ) then //potrebbe essere arrivato un altro tipo di messaggio
+			if( isDef($message) ) then // another type of message may have arrived
 				if( third($message) = pubKeyFromPrivate($k) ) then
 					(first($message), second($message))
 				endif
@@ -100,7 +100,7 @@ definitions:
 
 	function decryptNK($m in MessageID, $k in PrivKeyID) =
 		let ($message = messageNK($m)) in
-			if( isDef($message) ) then //potrebbe essere arrivato un altro tipo di messaggio
+			if( isDef($message) ) then // another type of message may have arrived
 				if( second(messageNK($m)) = pubKeyFromPrivate($k) ) then
 					first($message)
 				endif
@@ -114,7 +114,7 @@ definitions:
 
 	rule r_send($s in UserID, $r in UserID, $m in MessageID) =
 			par
-				comunication($m) := ($s, $r, $m)
+				comunication($m) := ($s, $r)
 				hasBeenRead($m)  := FALSE
 			endpar
 	
@@ -150,7 +150,7 @@ definitions:
 			if first(comunication($m)) = $receiver then
 				skip // ignore false communications (Users doesen't send messages to themselves)
 			else
-			let ($decrMessage = decryptNAK($m, privKeyOf($receiver))) in
+			let ($decrMessage = decryptNUK($m, privKeyOf($receiver))) in
 				par
 					hasBeenRead($m) := TRUE
 					if $decrMessage = undef then 
@@ -182,55 +182,63 @@ definitions:
 			
 	rule r_receiveNNK($receiver in UserID) =
 		choose $m in MessageID with messageType($m) = NNK and hasBeenRead($m)=FALSE and second(comunication($m)) = $receiver do
-			let ($decrMessage = decryptNNK($m, privKeyOf($receiver))) in
-				par
-					hasBeenRead($m) := TRUE
-					if $decrMessage = undef then // this happen when message is sent to receiver with a wrong pubKey
-						skip
-					else
-						let($nonce1 = first($decrMessage), $nonce2 = second($decrMessage)) in
-							if( knowNonce($receiver,$nonce1) = TRUE ) then  // check if he generated the received nonce
-								par
-									knowNonce($receiver,$nonce2) := TRUE
-									isNonceArrivedToReceiver($nonce1) := TRUE
-									let ($exReceiver = hasSentTo($receiver,$nonce1)) in // find the user who was initially sent nonce1
-										choose $response_message in MessageID with messageType($response_message) = undef do 
-											par
-												messageType($response_message) := NK
-												messageNK($response_message) := ($nonce2, pubKeyOf($exReceiver))
-												r_send[$receiver, $exReceiver, $response_message]
-											endpar
-									endlet
-								endpar
-							endif
-						endlet
-					endif
-				endpar
-			endlet
+			if first(comunication($m)) = $receiver then
+				skip // ignore false communications (Users doesen't send messages to themselves)
+			else
+				let ($decrMessage = decryptNNK($m, privKeyOf($receiver))) in
+					par
+						hasBeenRead($m) := TRUE
+						if $decrMessage = undef then // this happen when message is sent to receiver with a wrong pubKey
+							skip
+						else
+							let($nonce1 = first($decrMessage), $nonce2 = second($decrMessage)) in
+								if( knowNonce($receiver,$nonce1) = TRUE ) then  // check if he generated the received nonce
+									par
+										knowNonce($receiver,$nonce2) := TRUE
+										isNonceArrivedToReceiver($nonce1) := TRUE
+										let ($exReceiver = hasSentTo($receiver,$nonce1)) in // find the user who was initially sent nonce1
+											choose $response_message in MessageID with messageType($response_message) = undef do 
+												par
+													messageType($response_message) := NK
+													messageNK($response_message) := ($nonce2, pubKeyOf($exReceiver))
+													r_send[$receiver, $exReceiver, $response_message]
+												endpar
+										endlet
+									endpar
+								endif
+							endlet
+						endif
+					endpar
+				endlet
+			endif
 	
 	rule r_receiveNK($receiver in UserID) =
 		choose $m in MessageID with messageType($m) = NK and hasBeenRead($m)=FALSE and second(comunication($m)) = $receiver do
-			let ($decrMessage = decryptNK($m, privKeyOf($receiver))) in
-				par
-					hasBeenRead($m) := TRUE
-					if $decrMessage = undef then // this happen when message is sent to receiver with a wrong pubKey
-						skip
-					else
-						let($nonce0 = $decrMessage) in
-							if (knowNonce($receiver,$nonce0) = TRUE ) then
-								// check if receiver already knew to have already established a correct connection
-								// this discard the NK messages sent more times with the same nonce
-								if(isNonceArrivedToReceiver($nonce0) = FALSE) then
-									par
-										isNonceArrivedToReceiver($nonce0) := TRUE
-										terminatedSession := terminatedSession + 1
-									endpar
+			if first(comunication($m)) = $receiver then
+				skip // ignore false communications (Users doesen't send messages to themselves)
+			else
+				let ($decrMessage = decryptNK($m, privKeyOf($receiver))) in
+					par
+						hasBeenRead($m) := TRUE
+						if $decrMessage = undef then // this happen when message is sent to receiver with a wrong pubKey
+							skip
+						else
+							let($nonce0 = $decrMessage) in
+								if (knowNonce($receiver,$nonce0) = TRUE ) then
+									// check if receiver already knew to have already established a correct connection
+									// this discard the NK messages sent more times with the same nonce
+									if(isNonceArrivedToReceiver($nonce0) = FALSE) then
+										par
+											isNonceArrivedToReceiver($nonce0) := TRUE
+											terminatedSession := terminatedSession + 1
+										endpar
+									endif
 								endif
-							endif
-						endlet
-					endif
-				endpar
-			endlet
+							endlet
+						endif
+					endpar
+				endlet
+			endif
 	
 	rule r_behaveCorrectly($u in UserID) = 
 		par
@@ -250,7 +258,7 @@ definitions:
 			// can read messages already read by others (e.g. he read and replayed)
 			// can read messages that he is not the intended receiver
 			choose $m in MessageID with messageType($m) = NUK do
-				let ($decrMessage = decryptNAK($m, privKeyOf($receiver))) in
+				let ($decrMessage = decryptNUK($m, privKeyOf($receiver))) in
 					// hasBeenRead($m) := TRUE // he doesen't change the message status because he is sneaky
 					if $decrMessage = undef then // this happen when is not able to unencrypt the message
 						// he CAN change the comunication's sender in someone different (this model any possibility, also the not useful)
@@ -353,6 +361,6 @@ definitions:
 //	function knowNonce($u in UserID, $n in Nonce) = FALSE
 //	function isNonceArrivedToReceiver($n in Nonce) = FALSE
 //	
-//	function comunication($m in MessageID) = (undef, undef, undef) 
+//	function comunication($m in MessageID) = (undef, undef) 
 //	function messageType($m in MessageID) = undef
 	

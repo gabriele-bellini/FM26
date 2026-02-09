@@ -72,7 +72,7 @@ definitions:
 			forall $n1 in Nonce with true do isNonceArrivedToReceiver($n1) := FALSE
 			forall $m in MessageID do 
 				par
-					comunication($m) := (undef, undef, undef) 
+					comunication($m) := (undef, undef) 
 					hasBeenRead($m) := undef
 					messageType($m) := undef
 					messageNUK($m) := (undef, undef, undef) 
