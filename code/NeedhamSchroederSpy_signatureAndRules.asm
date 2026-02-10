@@ -241,12 +241,12 @@ definitions:
 			endif
 	
 	rule r_behaveCorrectly($u in UserID) = 
-		par
+		seq
 			r_initSession[$u]
 			r_receiveNUK[$u]
 			r_receiveNNK[$u]
 			r_receiveNK[$u]
-		endpar
+		endseq
 	
 	
 	rule r_receiveNUK_spy($receiver in UserID) = if isSpy($receiver) = TRUE then
@@ -275,10 +275,15 @@ definitions:
 								knowNonce($receiver,$nonce0) := TRUE // spy always save all the info it can 				
 								hasSentTo($receiver,$nonce0) := $newReceiver // this is the reality and is true in any case
 								// change message and send it again
-								messageNUK($m) := ($nonce0, $exSender, pubKeyOf($newReceiver))
+								choose $modifyOldMessage in Bool with true do
+									if $modifyOldMessage = TRUE then
+										messageNUK($m) := ($nonce0, $receiver, pubKeyOf($newReceiver))
+									else
+										messageNUK($m) := ($nonce0, $exSender, pubKeyOf($newReceiver))
+									endif
 								choose $sendWithMyIdentity in Bool with true do
 									if $sendWithMyIdentity = TRUE then
-										r_send[$receiver, $newReceiver, $m] // send old message
+										r_send[$receiver, $newReceiver, $m]
 									else
 										par
 											hasSentTo($exSender,$nonce0) := $newReceiver // this is what T will fake
@@ -334,12 +339,12 @@ definitions:
 		endif endif
 	
 	rule r_behaveRandomly($u in UserID) = if isSpy($u) = TRUE then
-		par
+		seq
 			// r_initSession[$u]
 			r_receiveNUK_spy[$u]
 			// r_receiveNNK_spy[$u]
 			r_receiveNK_spy[$u]
-		endpar	
+		endseq	
 	endif
 	
 //	rule r_simulatedMain = 
